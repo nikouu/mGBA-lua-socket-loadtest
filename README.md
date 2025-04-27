@@ -32,6 +32,8 @@ While there will be issues when sending many messages at once due to the singlet
 
 # Version 2
 
+[Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version2)
+
 ## Handling socket cleanup on close
 
 This version begins to look at how to deal with the different ways mGBA-http can be closed.
@@ -109,3 +111,66 @@ Where we can have the option of swallowing the error.
 ## socket.ERRORS.AGAIN
 
 It seems every request will have the "socket.ERRORS.AGAIN" error. Even the two example lua scripts [[1](https://github.com/mgba-emu/mgba/blob/c33a0d65344984294ed8666e98d1735a29f0a2d8/res/scripts/socketserver.lua#L37)][[2](https://github.com/mgba-emu/mgba/blob/c33a0d65344984294ed8666e98d1735a29f0a2d8/res/scripts/sockettest.lua#L39)] from the mGBA repo ignore this error. Meaning this can ignore it too.
+
+# Version 3
+
+[Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version3)
+
+Version 3 is around manually cleaning up a socket. Ensuring that future work can be correctly cleaned up outside of the `Dispose()` call in `SocketService.cs`. 
+
+For this, a new socket will be created inside the `SocketService` singleton for each request then cleaned up afterwards. This can automatically be done with `using`:
+
+```csharp
+public async Task<string> SendMessageAsync(string message)
+{
+    var ipAddress = IPAddress.Parse("127.0.0.1");
+    var ipEndpoint = new IPEndPoint(ipAddress, 8888);
+    using var socket = new Socket(ipEndpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp); // using declaration for automatic cleanup
+
+    await socket.ConnectAsync(ipEndpoint);
+
+    var messageBytes = Encoding.UTF8.GetBytes(message);
+    await socket.SendAsync(messageBytes, SocketFlags.None);
+
+    var buffer = new byte[1_024];
+    var received = await socket.ReceiveAsync(buffer, SocketFlags.None);
+    var response = Encoding.UTF8.GetString(buffer, 0, received);
+
+    return response;
+}
+```
+
+Which correctly triggers the "disconnected" status in mGBA.
+
+But to better understand the situation we can clean up the socket ourselves:
+
+```csharp
+public async Task<string> SendMessageAsync(string message)
+{
+    var ipAddress = IPAddress.Parse("127.0.0.1");
+    var ipEndpoint = new IPEndPoint(ipAddress, 8888);
+    var socket = new Socket(ipEndpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+
+    await socket.ConnectAsync(ipEndpoint);
+
+    var messageBytes = Encoding.UTF8.GetBytes(message);
+    await socket.SendAsync(messageBytes, SocketFlags.None);
+
+    var buffer = new byte[1_024];
+    var received = await socket.ReceiveAsync(buffer, SocketFlags.None);
+    var response = Encoding.UTF8.GetString(buffer, 0, received);
+
+    socket.Shutdown(SocketShutdown.Both);
+    socket.Close();
+    socket.Dispose();            
+
+    return response;
+}
+```
+
+That seems to be a pattern people use a lot even though `.Close()` doesn't do much and also calls `.Dispose()` [under the hood](https://github.com/dotnet/runtime/blob/1d1bf92fcf43aa6981804dc53c5174445069c9e4/src/libraries/System.Net.Sockets/src/System/Net/Sockets/Socket.cs#L942).
+
+![Version 3 disconnected](images/version3_disconnected.jpg)
+Note: The error states aren't errored because in version 2 they were changed to regular logging calls.
+
+With that knowledge we can continue with using declaration in the first code example above. This also means that every socket will be properly cleaned up (assuming there's no message in-flight) with whatever way a user closes mGBA-http.

@@ -13,14 +13,4 @@ app.MapGet("/mgbaendpoint", async (SocketService socket, string message) =>
     return await socket.SendMessageAsync(message);
 });
 
-app.Lifetime.ApplicationStopping.Register(() =>
-{
-    Console.Beep();
-});
-
-AppDomain.CurrentDomain.ProcessExit += (s, e) =>
-{
-    Console.Beep();
-};
-
 app.Run();
