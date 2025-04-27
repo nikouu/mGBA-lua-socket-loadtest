@@ -20,7 +20,7 @@ https://localhost:7185/mgbaendpoint?message=a
 
 [heroldev/AGB-buttontest](https://github.com/heroldev/AGB-buttontest) is the ROM used when running mGBA.
 
-# Version 1
+# Version 1 - Base state
 
 [Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version1)
 
@@ -30,7 +30,7 @@ Version 1 brings starts this project with:
 
 While there will be issues when sending many messages at once due to the singleton socket, this version will only deal with simple messages now and again.
 
-# Version 2
+# Version 2 - Automatic socket cleanup on app close
 
 [Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version2)
 
@@ -112,7 +112,7 @@ Where we can have the option of swallowing the error.
 
 It seems every request will have the "socket.ERRORS.AGAIN" error. Even the two example lua scripts [[1](https://github.com/mgba-emu/mgba/blob/c33a0d65344984294ed8666e98d1735a29f0a2d8/res/scripts/socketserver.lua#L37)][[2](https://github.com/mgba-emu/mgba/blob/c33a0d65344984294ed8666e98d1735a29f0a2d8/res/scripts/sockettest.lua#L39)] from the mGBA repo ignore this error. Meaning this can ignore it too.
 
-# Version 3
+# Version 3 - Manual socket closing
 
 [Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version3)
 
