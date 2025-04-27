@@ -39,7 +39,16 @@ function ST_received(id)
 			console:log("ST_received 4")
 			if err ~= socket.ERRORS.AGAIN then
 				console:log("ST_received 5")
-				console:error(ST_format(id, err, true))
+				if err == "disconnected" then
+					console:log("ST_received 6")
+					console:log(ST_format(id, err, true))
+				elseif err == socket.ERRORS.UNKNOWN_ERROR then
+					console:log("ST_received 7")
+					console:log(ST_format(id, err, true))
+				else
+					console:log("ST_received 8")
+					console:error(ST_format(id, err, true))
+				end
 				ST_stop(id)
 			end
 			return

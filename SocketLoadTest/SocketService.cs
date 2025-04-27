@@ -35,6 +35,7 @@ namespace SocketLoadTestServer
 
         protected virtual void Dispose(bool disposing)
         {
+            Console.Beep();
             if (disposing)
             {
                 if (_socket.Connected)
