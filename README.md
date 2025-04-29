@@ -174,3 +174,5 @@ That seems to be a pattern people use a lot even though `.Close()` doesn't do mu
 Note: The error states aren't errored because in version 2 they were changed to regular logging calls.
 
 With that knowledge we can continue with using declaration in the first code example above. This also means that every socket will be properly cleaned up (assuming there's no message in-flight) with whatever way a user closes mGBA-http.
+
+## Version 4 - Load testing
