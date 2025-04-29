@@ -176,3 +176,31 @@ Note: The error states aren't errored because in version 2 they were changed to 
 With that knowledge we can continue with using declaration in the first code example above. This also means that every socket will be properly cleaned up (assuming there's no message in-flight) with whatever way a user closes mGBA-http.
 
 ## Version 4 - Load testing
+
+Now that we understand the connections to mGBA, it's time to start benchmarking. Version 4 brings in the load testing client. Here is the baseline of the socket code from version 3:
+
+| Requests per second | Actual requests per second | Average latency (ms) | Max latency (ms) | Success rate |
+| ------------------: | -------------------------: | -------------------: | ---------------: | -----------: |
+|                   1 |                       1.00 |                   32 |              264 |         100% |
+|                   2 |                       1.98 |                   28 |              245 |         100% |
+|                   3 |                       2.95 |                   32 |              279 |         100% |
+|                   4 |                       3.79 |                   37 |              282 |          96% |
+|                   5 |                       4.83 |                   31 |              218 |          98% |
+|                  10 |                       9.50 |                   70 |            1,465 |          97% |
+|                  15 |                      14.23 |                  908 |            8,476 |          97% |
+|                  20 |                       9.78 |               10,758 |           32,102 |          79% |
+
+I ran these a few times but there was always a lot of variability. Which was also my experience during mGBA-http and with the errors back in version 2. Often the 1-5 request per second lot will hover around 99% success too.
+
+For all scenarios, it looks like:
+1. The requests back up, see max latency
+2. The average latency for small RPS is around 30ms
+3. The requests per second really drop off at above 15
+
+Our limiting factor is on the mGBA side - at least for how everything has been written for version 4. 
+
+I'd like to set a goal of a consistent 100% success rate at under 60ms max latency for five requests per second for this project. I suspect a lot of the latency is the establishing and closing sockets as each request opens and disposes of a socket. 
+
+Meaning next up, we can try socket pooling.
+
+## Version 5 - Socket pooling

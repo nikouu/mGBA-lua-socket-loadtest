@@ -64,6 +64,8 @@ namespace SocketLoadTestClient
 
             Console.WriteLine($"Total requests sent: {totalRequestsSent}");
             Console.WriteLine($"Successful requests: {successfulRequestCount} ({(int)(((double)successfulRequestCount / totalRequestsSent) * 100)}%)");
+            Console.WriteLine($"Average latency (ms): {_stats.Average(x => x.Duration.TotalMilliseconds)}");
+            Console.WriteLine($"Largest latency (ms): {_stats.Max(x => x.Duration.TotalMilliseconds)}");
             Console.WriteLine($"Total test time (seconds): {totalTime:F2}");
             Console.WriteLine($"Requests per second handled: {successfulRequestCount / totalTime:F2}");
         }
