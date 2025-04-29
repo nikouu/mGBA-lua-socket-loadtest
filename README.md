@@ -204,3 +204,115 @@ I'd like to set a goal of a consistent 100% success rate at under 60ms max laten
 Meaning next up, we can try socket pooling.
 
 ## Version 5 - Socket pooling
+
+I think(?) the idea of socket pooling is a little difficult because TCP stockets are stateful. However we're always going to be sending to the same endpoint so I think that makes it okay(?). I also have no idea how mGBA will handle having concurrent requests on the same socket. Both thoughts will be addressed by:
+
+1. Creating a socket pool in C#
+2. During the load testing, pass a new GUID for every message and check that the correct GUID gets returned
+
+.NET comes with a generic object pool in the form of [Microsoft.Extensions.ObjectPool](Microsoft.Extensions.ObjectPool) and I anticipate that a few sockets can be created and reused. The crux of this work is: 
+
+```csharp
+public class ReusableSocket : IResettable, IDisposable
+{
+    private readonly Socket _socket;
+    private readonly IPEndPoint _ipEndpoint;
+
+    public ReusableSocket(string ipAddress, int port)
+    {
+
+        var address = IPAddress.Parse("127.0.0.1");
+        _ipEndpoint = new IPEndPoint(address, port);
+        _socket = new Socket(_ipEndpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+    }
+
+    public async Task<string> SendMessageAsync(string message)
+    {
+        if (!_socket.Connected)
+        {
+            await _socket.ConnectAsync(_ipEndpoint);
+        }
+
+        var messageBytes = Encoding.UTF8.GetBytes(message);
+        await _socket.SendAsync(messageBytes, SocketFlags.None);
+
+        var buffer = new byte[1_024];
+        var received = await _socket.ReceiveAsync(buffer, SocketFlags.None);
+        var response = Encoding.UTF8.GetString(buffer, 0, received);
+
+        return response;
+    }
+
+    public bool TryReset()
+    {
+        return true;
+    }
+
+    public void Dispose()
+    {
+        _socket?.Dispose();
+        GC.SuppressFinalize(this);
+    }
+}
+```
+
+Since we'll be reusing the socket in the same state, there's no need to reset. Now on each call, we inject in the pool to get a socket from:
+
+```csharp
+app.MapGet("/mgbaendpoint", async (ObjectPool<ReusableSocket> socketPool, string message) =>
+{
+    var socket = socketPool.Get();
+
+    try
+    {
+        return await socket.SendMessageAsync(message);
+    }
+    finally
+    {
+        socketPool.Return(socket);
+    }
+});
+```
+
+Via the IoC setup, this will give us a socket dedicated for that request. If there are idle sockets in the pool it will use one of those, and if there are no sockets left, it will use the `ReusableSocketPooledObjectPolicy` class to create one (see the source for more details).
+
+At the same time, a slight modification to use a new GUID for every request can be done so we can ensure the right response is returning to the right request. 
+
+Running the benchmarks again:
+
+| Requests per second | Actual requests per second | Average latency (ms) | Max latency (ms) | Success rate |
+| ------------------: | -------------------------: | -------------------: | ---------------: | -----------: |
+|                   1 |                          1 |                   43 |              240 |         100% |
+|                   2 |                       1.97 |                   36 |              314 |         100% |
+|                   3 |                       2.95 |                   33 |              246 |         100% |
+|                   4 |                       3.92 |                   29 |              297 |         100% |
+|                   5 |                       4.90 |                   29 |              274 |         100% |
+|                  10 |                       9.76 |                   29 |              361 |         100% |
+|                  15 |                      10.43 |                5,122 |           12,935 |          81% |
+|                  20 |                            |                      |                  |              |
+
+When hitting around 15 RPS it starts to fall apart, and mysteriously this error begins to fail requests:
+> System.Net.Sockets.SocketException (10056): A connect request was made on an already connected socket.
+
+But how? Due to the object pool each inbound HTTP request get its own instance of `ReusableSocket` i.e. there's no non-threadsafe action (as far as I know). And how could the connection check be false, triggering a reconnect, but then throwing an exception saying the connection already exists?
+
+```csharp
+ public async Task<string> SendMessageAsync(string message)
+ {
+     if (!_socket.Connected)
+     {
+         await _socket.ConnectAsync(_ipEndpoint);
+     }
+
+    // --
+ }
+```
+
+Part of it is that the `Connect` property on `Socket` indicates the [connection state as of the _last operation_](https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.socket.connected?view=net-9.0#remarks). Meaning in that time the connection may have been dropped from the other side? Though if that's the case, and on a previous call the socket failed, how does the `ConnectAsync()` call fail if the socket is apparently in a disconnected state? This I have no idea about.
+
+It could be something to do with the first exception that gets thrown during a load test:
+>System.Net.Sockets.SocketException (10054): An existing connection was forcibly closed by the remote host.
+
+Where I assume the socket is in a bad state. This would cause the `Connect` property to be false, but I wonder if the other side isn't resilient enough to have properly closed the connection? This would mean this socket should be properly closed, and a new socket used. 
+
+While for a "regular" number of calls, the success rate is now 100% and average latency low my goal wasn't reached (yet) and higher RPS fail. It's time to introduce retries.

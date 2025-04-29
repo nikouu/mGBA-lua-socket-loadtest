@@ -15,7 +15,7 @@ namespace SocketLoadTestClient
             _httpClient = httpClient;
         }
 
-        public async Task RunLoadTest(string message, TimeSpan duration, int requestsPerSecond)
+        public async Task RunLoadTest(TimeSpan duration, int requestsPerSecond)
         {
             Console.WriteLine($"Running load test with {requestsPerSecond} requests per second for {duration.Seconds} seconds...");
             var totalRequestsToSend = duration.Seconds * requestsPerSecond;
@@ -32,7 +32,7 @@ namespace SocketLoadTestClient
                 {
                     for (int i = 0; i < requestsPerSecond; i++)
                     {
-                        var task = SendRequestAndRecordMetricsAsync(message);
+                        var task = SendRequestAndRecordMetricsAsync(Guid.NewGuid().ToString());
                         _requests.Add(task);
                         totalRequestsSent++;
 
