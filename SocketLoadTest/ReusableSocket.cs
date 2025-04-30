@@ -9,6 +9,9 @@ namespace SocketLoadTestServer
     {
         private readonly Socket _socket;
         private readonly IPEndPoint _ipEndpoint;
+        private const int _maxRetries = 3;
+        private const int _initialDelay = 400;
+        private const int _maxDelay = 2000;
 
         public ReusableSocket(string ipAddress, int port)
         {
@@ -19,6 +22,34 @@ namespace SocketLoadTestServer
         }
 
         public async Task<string> SendMessageAsync(string message)
+        {
+            var attempts = 0;
+            var delay = _initialDelay;
+
+            while (attempts < _maxRetries)
+            {
+                try
+                {
+                    attempts++;
+                    return await SendAsync(message);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{attempts}][{message}]{ex.Message}");
+                    if (attempts >= _maxRetries)
+                    {
+                        throw;
+                    }
+
+                    await Task.Delay(delay);
+                    delay = Math.Min(delay * 3, _maxDelay);
+                }
+            }
+
+            throw new Exception("How did we get here?");
+        }
+
+        private async Task<string> SendAsync(string message)
         {
             if (!_socket.Connected)
             {

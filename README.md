@@ -177,7 +177,9 @@ With that knowledge we can continue with using declaration in the first code exa
 
 ## Version 4 - Load testing
 
-Now that we understand the connections to mGBA, it's time to start benchmarking. Version 4 brings in the load testing client. Here is the baseline of the socket code from version 3:
+[Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version4)
+
+Now that we understand the connections to mGBA, it's time to start benchmarking. **All benchmarks on this page are run for 30 seconds.** Version 4 brings in the load testing client. Here is the baseline of the socket code from version 3:
 
 | Requests per second | Actual requests per second | Average latency (ms) | Max latency (ms) | Success rate |
 | ------------------: | -------------------------: | -------------------: | ---------------: | -----------: |
@@ -204,6 +206,8 @@ I'd like to set a goal of a consistent 100% success rate at under 60ms max laten
 Meaning next up, we can try socket pooling.
 
 ## Version 5 - Socket pooling
+
+[Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version5)
 
 I think(?) the idea of socket pooling is a little difficult because TCP stockets are stateful. However we're always going to be sending to the same endpoint so I think that makes it okay(?). I also have no idea how mGBA will handle having concurrent requests on the same socket. Both thoughts will be addressed by:
 
@@ -289,7 +293,9 @@ Running the benchmarks again:
 |                   5 |                       4.90 |                   29 |              274 |         100% |
 |                  10 |                       9.76 |                   29 |              361 |         100% |
 |                  15 |                      10.43 |                5,122 |           12,935 |          81% |
-|                  20 |                            |                      |                  |              |
+|                  20 |                       4.28 |               38,406 |           87,501 |          74% |
+
+Remember before how I said there was variability? It seems that if I let everything cool off, I assume the [Time Wait] period we can get back to near 100% success even at 20 RPS, though still with high-ish latency. Something to think about later.
 
 When hitting around 15 RPS it starts to fall apart, and mysteriously this error begins to fail requests:
 > System.Net.Sockets.SocketException (10056): A connect request was made on an already connected socket.
@@ -316,3 +322,98 @@ It could be something to do with the first exception that gets thrown during a l
 Where I assume the socket is in a bad state. This would cause the `Connect` property to be false, but I wonder if the other side isn't resilient enough to have properly closed the connection? This would mean this socket should be properly closed, and a new socket used. 
 
 While for a "regular" number of calls, the success rate is now 100% and average latency low my goal wasn't reached (yet) and higher RPS fail. It's time to introduce retries.
+
+## Version 6 - Retries
+
+[Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version6)
+
+Taking the work of [Oleg Kyrylchuk](https://okyrylchuk.dev/) from [Understanding the Retry Pattern](https://okyrylchuk.dev/blog/understanding-the-retry-pattern/) for a tidy bit of retry:
+
+```csharp
+public async Task<string> SendMessageAsync(string message)
+{
+    var attempts = 0;
+    var delay = _initialDelay;
+
+    while (attempts < _maxRetries)
+    {
+        try
+        {
+            attempts++;
+            return await SendAsync(message);
+        }
+        catch
+        {
+            if (attempts >= _maxRetries)
+            {
+                throw;
+            }
+
+            await Task.Delay(delay);
+            delay = Math.Min(delay * 3, _maxDelay);
+        }
+    }
+
+    throw new Exception("How did we get here?");
+}
+```
+
+Then tweaking the delay values a little, gives us the following table of results:
+
+| Requests per second | Actual requests per second | Average latency (ms) | Max latency (ms) | Success rate |
+| ------------------: | -------------------------: | -------------------: | ---------------: | -----------: |
+|                   1 |                          1 |                   38 |              260 |         100% |
+|                   2 |                       1.98 |                   34 |              263 |         100% |
+|                   3 |                       2.95 |                   29 |              268 |         100% |
+|                   4 |                       3.92 |                   28 |              242 |         100% |
+|                   5 |                       4.90 |                   27 |              304 |         100% |
+|                  10 |                       9.76 |                   30 |              438 |         100% |
+|                  15 |                      14.61 |                   27 |              427 |         100% |
+|                  20 |                       4.28 |               38,406 |           87,501 |          74% |
+
+### The continued variability
+
+Plaguing these benchmarks have been the varability of the tests. At this point in the versions, the errors look like this for each of the retry attempts:
+
+1. An existing connection was forcibly closed by the remote host.
+2. A connect request was made on an already connected socket.
+3. A connect request was made on an already connected socket.
+
+But in this version, mixed with the knowledge from Version 2 - I think this happens because of the lack of proper socket cleanup when using the restart in Visual Studio:
+
+![VS Restart](images/VSRestart.jpg)
+
+Sometimes there are clean tests that are fast and 100% successful and looking in TCPView, really only one socket gets used. The following is a screenshot of a finished 20 requests per second for 30 seconds:
+
+![TCPViewSuccessfulTest](images/TCPViewSuccessfulTest.jpg)
+Note: I assume the number is lower than 600 because the [socket uses the Nagle algorithm by default](https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.socket.nodelay?view=net-9.0#system-net-sockets-socket-nodelay).
+
+Meaning a single socket can pretty much handle lots of requests, but sometimes it all backs up and throws errors. I wonder if it is because there's some weird socket reuse when the process starts again. 
+
+Running the load test without restarting the server doesn't cause issues. It's something to do with the socket cleanup when debugging in Visual Studio (again). While benchmarking should be run in release mode, I figured the gap with how sockets interacted wouldn't be this large. Tests from here onwards will be only using release binaries. So let's try making the benchmark table again, and go further:
+
+
+| Requests per second | Actual requests per second | Average latency (ms) | Max latency (ms) | Success rate |
+| ------------------: | -------------------------: | -------------------: | ---------------: | -----------: |
+|                   1 |                          1 |                   19 |              145 |         100% |
+|                   2 |                       1.98 |                   17 |              129 |         100% |
+|                   3 |                       2.95 |                   19 |              108 |         100% |
+|                   4 |                       3.92 |                   18 |              145 |         100% |
+|                   5 |                       4.90 |                   18 |              132 |         100% |
+|                  10 |                       9.75 |                   19 |              209 |         100% |
+|                  15 |                      14.65 |                   17 |              101 |         100% |
+|                  20 |                      19.40 |                   18 |              118 |         100% |
+|                  40 |                      32.06 |                   17 |              123 |         100% |
+|                  80 |                      63.31 |                   19 |            1,043 |         100% |
+|                 160 |                      63.67 |                 17.5 |              126 |         100% |
+
+So with everything in release mode, it's easy to send more than one request per frame to mGBA (GB and GBA run at 60fps). After 80 requests per second, the single threaded client doing the load test can't keep up with sending that many request per second. This is probably a great state to be in where requests can be handled faster than the framerate and thus inputs of the emulated hardware. While this project is simply reflecting values back, even with heavier calls, it _probably_ is enough performance.
+
+Looking back at my goal from Version 4:
+>I'd like to set a goal of a consistent 100% success rate at under 60ms max latency for five requests per second for this project
+
+While I didn't achieve my goal about max latency being under 60ms for five requests per second, considering the average and max latency numbers are about the same even into way higher RPS, I think it's fine.
+
+### Digging into max latency
+
+But why does it seem so consistent across all the recent benchmarks? I suspect it's because the first connection of a socket takes time. And when looking at it across different RPS benchmarks, it's very often the first one of the socket pool making the initial connection. The max otherwise, funnily enough is around 50-60ms!
