@@ -7,6 +7,6 @@ await Task.Delay(3000);
 
 var httpClient = new HttpClient() { BaseAddress = new Uri("http://localhost:5000") };
 var loadTest = new LoadTest(httpClient);
-await loadTest.RunLoadTest(TimeSpan.FromSeconds(30), 20);
+await loadTest.RunLoadTest(TimeSpan.FromSeconds(30), 60);
 
 Console.ReadLine();

@@ -417,3 +417,130 @@ While I didn't achieve my goal about max latency being under 60ms for five reque
 ### Digging into max latency
 
 But why does it seem so consistent across all the recent benchmarks? I suspect it's because the first connection of a socket takes time. And when looking at it across different RPS benchmarks, it's very often the first one of the socket pool making the initial connection. The max otherwise, funnily enough is around 50-60ms!
+
+## Version 7 - Tidy up
+
+This version is just to clean up `ReusableSocket` so it's in a good state to migrate over into mGBA-http. 
+
+### More pools
+
+The method that is doing the actual socket sending and recieving is unnecessarily allocating a new byte array for every request. It also is the crux of [mGBA-http issue #4](https://github.com/nikouu/mGBA-http/issues/4) where messages longer than 1024 bytes are truncated and data is left in the socket to pollute the next request. This is solved by using both [ArrayPool](https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1?view=net-9.0) and [Microsoft.IO.RecyclableMemoryStream](https://github.com/microsoft/Microsoft.IO.RecyclableMemoryStream).
+
+Before:
+```csharp
+private async Task<string> SendAsync(string message)
+{
+    if (!_socket.Connected)
+    {
+        await _socket.ConnectAsync(_ipEndpoint);
+    }
+
+    var messageBytes = Encoding.UTF8.GetBytes(message);
+    await _socket.SendAsync(messageBytes, SocketFlags.None);
+
+    var buffer = new byte[1_024];
+    var received = await _socket.ReceiveAsync(buffer, SocketFlags.None);
+    var response = Encoding.UTF8.GetString(buffer, 0, received);
+
+    return response;
+}
+```
+
+After:
+```csharp
+private async Task<string> ReadAsync()
+{
+    var buffer = ArrayPool<byte>.Shared.Rent(1024);
+    using var memoryStream = _recyclableMemoryStreamManager.GetStream();
+    do
+    {
+        var bytesRead = await _socket.ReceiveAsync(buffer, SocketFlags.None);
+        await memoryStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+    } while (_socket.Available > 0);
+
+    var response = Encoding.UTF8.GetString(memoryStream.GetReadOnlySequence());
+    return response;
+}
+```
+
+To ensure I don't regress into having truncated messages, I did the load test with 5000 byte messages, larger than the initial buffer. However, I learned about a new problem, TCP packet fragmentation! (I think...). What was happening was the message entering the Lua script was larger than the 1024 byte buffer. This hasn't come up in mGBA-http because either the large payload endpoints aren't fully supported yet, or it just isn't common with the arbitrary sized payloads that are usually small payloads (such as sending a log message). The previous truncation problem happened with the buffer on the _C# side_ due to a large response.
+
+The case of sending 5000bytes of data ended up causing the Lua script to fail reflecting it. I think because TCP is a streaming protocol, the do while loop check of `_socket.Available > 0` isn't enough as the socket might be empty, but the rest of the data hasn't arrived yet. The solution I opted for is a termination character (well, string) of `<|END|>`. This gets appended to messages sent both by the .NET side and the Lua side in order for both sides to correctly buffer entire messages.
+
+Here is the C# code after:
+```csharp
+private async Task<string> ReadAsync()
+{
+    var buffer = ArrayPool<byte>.Shared.Rent(1024);
+    using var memoryStream = _recyclableMemoryStreamManager.GetStream();
+    int totalBytes = 0;
+
+    while (true)
+    {
+        var bytesRead = await _socket.ReceiveAsync(buffer, SocketFlags.None);
+        if (bytesRead == 0)
+            break; // Socket closed
+
+        await memoryStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+        totalBytes += bytesRead;
+
+        // Check for termination marker in the accumulated buffer
+        var mem = memoryStream.GetBuffer().AsSpan(0, totalBytes);
+        int markerIndex = mem.IndexOf(_terminationBytes);
+        if (markerIndex >= 0)
+        {
+            // Found marker, extract message up to marker
+            var messageBytes = mem.Slice(0, markerIndex);
+            var response = Encoding.UTF8.GetString(messageBytes);
+            return response;
+        }
+    }
+
+    ArrayPool<byte>.Shared.Return(buffer);
+    return Encoding.UTF8.GetString(memoryStream.GetReadOnlySequence());
+}
+```
+
+And while no "before" is shown, here is the updated Lua code:
+```Lua
+function ST_received(id)
+    log("ST_received 1")
+    local sock = ST_sockets[id]
+    if not sock then return end
+    sock._buffer = sock._buffer or ""
+    while true do
+        local chunk, err = sock:receive(1024)
+        log("ST_received 2")
+        if chunk then
+            sock._buffer = sock._buffer .. chunk
+            while true do
+                local marker_start, marker_end = sock._buffer:find(TERMINATION_MARKER, 1, true)
+                if not marker_start then break end
+                local message = sock._buffer:sub(1, marker_start - 1)
+                sock._buffer = sock._buffer:sub(marker_end + 1)
+                log("ST_received 3")
+                log(ST_format(id, message:match("^(.-)%s*$")))
+                -- Echo back the message with the marker
+                sock:send(message .. TERMINATION_MARKER)
+            end
+        else
+            log("ST_received 4")
+            if err ~= socket.ERRORS.AGAIN then
+                log("ST_received 5")
+                if err == "disconnected" then
+                    log("ST_received 6")
+                    log(ST_format(id, err, true))
+                elseif err == socket.ERRORS.UNKNOWN_ERROR then
+                    log("ST_received 7")
+                    log(ST_format(id, err, true))
+                else
+                    log("ST_received 8")
+                    console:error(ST_format(id, err, true))
+                end
+                ST_stop(id)
+            end
+            return
+        end
+    end
+end
+```

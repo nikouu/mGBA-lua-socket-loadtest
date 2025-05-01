@@ -1,4 +1,5 @@
 local ENABLE_LOGGING = false
+local TERMINATION_MARKER = "<|END|>"
 
 local function log(msg)
 	if ENABLE_LOGGING then
@@ -36,14 +37,23 @@ function ST_received(id)
     log("ST_received 1")
     local sock = ST_sockets[id]
     if not sock then return end
+    sock._buffer = sock._buffer or ""
     while true do
-        local message, err = sock:receive(1024)
+        local chunk, err = sock:receive(1024)
         log("ST_received 2")
-        if message then
-            log("ST_received 3")
-            log(ST_format(id, message:match("^(.-)%s*$")))
-            sock:send(message)
-        else			
+        if chunk then
+            sock._buffer = sock._buffer .. chunk
+            while true do
+                local marker_start, marker_end = sock._buffer:find(TERMINATION_MARKER, 1, true)
+                if not marker_start then break end
+                local message = sock._buffer:sub(1, marker_start - 1)
+                sock._buffer = sock._buffer:sub(marker_end + 1)
+                log("ST_received 3")
+                log(ST_format(id, message:match("^(.-)%s*$")))
+                -- Echo back the message with the marker
+                sock:send(message .. TERMINATION_MARKER)
+            end
+        else
             log("ST_received 4")
             if err ~= socket.ERRORS.AGAIN then
                 log("ST_received 5")

@@ -10,6 +10,8 @@ namespace SocketLoadTestClient
         private readonly ConcurrentQueue<Stat> _stats = new();
         private readonly ConcurrentBag<Task> _requests = new();
 
+        private static readonly string _longMessage = new string('a', 5000);
+
         public LoadTest(HttpClient httpClient)
         {
             _httpClient = httpClient;
@@ -32,7 +34,7 @@ namespace SocketLoadTestClient
                 {
                     for (int i = 0; i < requestsPerSecond; i++)
                     {
-                        var task = SendRequestAndRecordMetricsAsync(Guid.NewGuid().ToString());
+                        var task = SendRequestAndRecordMetricsAsync(_longMessage);
                         _requests.Add(task);
                         totalRequestsSent++;
 
@@ -95,15 +97,22 @@ namespace SocketLoadTestClient
 
                 if (response.StatusCode != HttpStatusCode.OK)
                 {
+                    Console.WriteLine("bad http status");
                     return false;
                 }
 
                 var content = await response.Content.ReadAsStringAsync();
 
+                if (content != message)
+                {
+                    Console.WriteLine($"content doesnt equal message: {content.Length} vs {message.Length}");
+                }
+
                 return content == message;
             }
-            catch
+            catch (Exception e)
             {
+                Console.WriteLine(e.Message);
                 return false;
             }
         }
