@@ -1,4 +1,4 @@
-local ENABLE_LOGGING = false
+local ENABLE_LOGGING = true
 local TERMINATION_MARKER = "<|END|>"
 
 local function log(msg)
@@ -107,6 +107,7 @@ while not server do
             console:error(ST_format("Listen", err, true))
         else
             console:log("Socket Server Test: Listening on port " .. port)
+            console:log("Logging set to: " .. tostring(ENABLE_LOGGING))
             server:add("received", ST_accept)
         end
     end

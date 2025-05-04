@@ -18,6 +18,8 @@ When the .NET server is running, the message can be sent via:
 https://localhost:7185/mgbaendpoint?message=a
 ```
 
+**This work ran over a couple of weeks and it's written ramblings of my learning as I go. There will be incorrect statements/theories, me going down the wrong path in my learning, and I'm sure some buried problems. But this repo is really fun!**
+
 [heroldev/AGB-buttontest](https://github.com/heroldev/AGB-buttontest) is the ROM used when running mGBA.
 
 # Version 1 - Base state
@@ -625,8 +627,17 @@ So that's a fantastic limit of 20.1k requests a minute - for now. I'm sure there
 1. No warm up
 1. Vastly not the use case
 
-Will matter too much. It's just fun to do 😁
+Won't matter too much. It's just fun to do 😁
 
-- do a manual test where a request is sent, then spend like 5 mins not sending a request, then send another. see if theres a socket timeout or something which then invalidates the socket for future use
-    - maye ther needs to be a reset state if theres an exception flag set or something
-- as the versions went, some old ideas were wrong
+### Checking for a long timeout
+
+What if the user sends a request, which opens a socket and adds it to the socket pool, then doesn't send another request for a long time? Is a long opened and long unused socket going to stay alive? Will it automatically close after some idle or linger timeout?
+
+Seems the answer is ambigious:
+- [It will always be open if they're on the same machine as the connection probably won't drop](https://stackoverflow.com/questions/11712425/do-tcp-sockets-automatically-close-after-some-time-if-no-data-is-sent)
+- [The socket is open for two hours](https://stackoverflow.com/questions/1480236/does-a-tcp-socket-connection-have-a-keep-alive)
+- [It's up to the parties to work it out](https://serverfault.com/questions/338388/is-it-possible-for-a-tcp-connection-to-remain-open-when-the-client-has-disconnec)
+
+Since I'm using Windows, I'll send a request then wait a little over two hours, then send another one to see if the first (and only) socket in the socket pool will work. Side note: it might also be useful to have a full re-creation of the socket in some circumstances anyway.
+
+So after 3 hours and 20 minutes, the second request was happily sent. 🤷‍♀️ Regardless, added some new socket exception catches which simply recreate the socket instance as part of the retries.

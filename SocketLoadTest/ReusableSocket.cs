@@ -11,7 +11,7 @@ namespace SocketLoadTestServer
 {
     public class ReusableSocket : IResettable, IDisposable
     {
-        private readonly Socket _socket;
+        private Socket _socket;
         private readonly IPEndPoint _ipEndpoint;
         private const int _maxRetries = 3;
         private const int _initialDelay = 400;
@@ -49,19 +49,41 @@ namespace SocketLoadTestServer
                     return await SendAsync(message);
                 }
                 catch (Exception ex)
-                {
+                {                    
                     Console.WriteLine($"[{attempts}][-]{ex.Message}");
                     if (attempts >= _maxRetries)
                     {
                         throw;
                     }
 
+                    if (ex is SocketException sockEx &&
+                        (sockEx.SocketErrorCode 
+                        is SocketError.ConnectionReset 
+                        or SocketError.NotConnected 
+                        or SocketError.IsConnected 
+                        or SocketError.ConnectionAborted
+                        or SocketError.Disconnecting))
+                    {
+                        RecreateSocket();
+                    }
+
                     await Task.Delay(delay);
-                    delay = Math.Min(delay * 3, _maxDelay);
+                    delay = Math.Min(delay * 3, _maxDelay);                    
                 }
             }
 
             throw new Exception("How did we get here?");
+        }
+
+        private void RecreateSocket()
+        {
+            try
+            {
+                _socket?.Dispose();
+            }
+            catch { }
+
+            _socket = new Socket(_ipEndpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         }
 
         private async Task<string> SendAsync(string message)
@@ -86,32 +108,39 @@ namespace SocketLoadTestServer
         private async Task<string> ReadAsync()
         {
             var buffer = ArrayPool<byte>.Shared.Rent(1024);
-            using var memoryStream = _recyclableMemoryStreamManager.GetStream();
-            int totalBytes = 0;
-
-            while (true)
+            try
             {
-                var bytesRead = await _socket.ReceiveAsync(buffer, SocketFlags.None);
-                if (bytesRead == 0)
-                    break; // Socket closed
+                using var memoryStream = _recyclableMemoryStreamManager.GetStream();
+                int totalBytes = 0;
 
-                await memoryStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                totalBytes += bytesRead;
-
-                // Check for termination marker in the accumulated buffer
-                var mem = memoryStream.GetBuffer().AsSpan(0, totalBytes);
-                int markerIndex = mem.IndexOf(_terminationBytes);
-                if (markerIndex >= 0)
+                while (true)
                 {
-                    // Found marker, extract message up to marker
-                    var messageBytes = mem.Slice(0, markerIndex);
-                    var response = Encoding.UTF8.GetString(messageBytes);
-                    return response;
-                }
-            }
+                    var bytesRead = await _socket.ReceiveAsync(buffer, SocketFlags.None);
+                    if (bytesRead == 0)
+                    {
+                        throw new SocketException((int)SocketError.Disconnecting);
+                    }
 
-            ArrayPool<byte>.Shared.Return(buffer);
-            return Encoding.UTF8.GetString(memoryStream.GetReadOnlySequence());
+                    await memoryStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+                    totalBytes += bytesRead;
+
+                    // Check for termination marker in the accumulated buffer
+                    var mem = memoryStream.GetBuffer().AsSpan(0, totalBytes);
+                    int markerIndex = mem.IndexOf(_terminationBytes);
+                    if (markerIndex >= 0)
+                    {
+                        // Found marker, extract message up to marker
+                        var messageBytes = mem.Slice(0, markerIndex);
+                        var response = Encoding.UTF8.GetString(messageBytes);
+                        return response;
+                    }
+                }
+                return Encoding.UTF8.GetString(memoryStream.GetReadOnlySequence());
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
 
         private async Task<string> ReadAsync2()
