@@ -5,7 +5,7 @@ This work continues from [mGBA-lua-Socket](https://github.com/nikouu/mGBA-lua-So
 This project has three performance goals: 
 1. Find the cleanest way to connect and disconnect sockets
 2. Find the throughput limits
-3. Explore multiplexing
+3. ~~Explore multiplexing~~ ended up not doing this
 
 ## Preface
 
@@ -177,7 +177,7 @@ Note: The error states aren't errored because in version 2 they were changed to 
 
 With that knowledge we can continue with using declaration in the first code example above. This also means that every socket will be properly cleaned up (assuming there's no message in-flight) with whatever way a user closes mGBA-http.
 
-## Version 4 - Load testing
+# Version 4 - Load testing
 
 [Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version4)
 
@@ -207,7 +207,7 @@ I'd like to set a goal of a consistent 100% success rate at under 60ms max laten
 
 Meaning next up, we can try socket pooling.
 
-## Version 5 - Socket pooling
+# Version 5 - Socket pooling
 
 [Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version5)
 
@@ -325,7 +325,7 @@ Where I assume the socket is in a bad state. This would cause the `Connect` prop
 
 While for a "regular" number of calls, the success rate is now 100% and average latency low my goal wasn't reached (yet) and higher RPS fail. It's time to introduce retries.
 
-## Version 6 - Retries
+# Version 6 - Retries
 
 [Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version6)
 
@@ -373,7 +373,7 @@ Then tweaking the delay values a little, gives us the following table of results
 |                  15 |                      14.61 |                   27 |              427 |         100% |
 |                  20 |                       4.28 |               38,406 |           87,501 |          74% |
 
-### The continued variability
+## The continued variability
 
 Plaguing these benchmarks have been the varability of the tests. At this point in the versions, the errors look like this for each of the retry attempts:
 
@@ -418,15 +418,17 @@ Looking back at my goal from Version 4:
 
 While I didn't achieve my goal about max latency being under 60ms for five requests per second, considering the average and max latency numbers are about the same even into way higher RPS, I think it's fine.
 
-### Digging into max latency
+## Digging into max latency
 
 But why does it seem so consistent across all the recent benchmarks? I suspect it's because the first connection of a socket takes time. And when looking at it across different RPS benchmarks, it's very often the first one of the socket pool making the initial connection. The max otherwise, funnily enough is around 50-60ms! Might be worth in the future looking at the 95th or 99th percentile as well.
 
-## Version 7 - Tidy up
+# Version 7 - Tidy up
+
+[Tag link](https://github.com/nikouu/mGBA-lua-socket-loadtest/tree/Version7)
 
 This version is just to clean up `ReusableSocket` so it's in a good state to migrate over into mGBA-http. 
 
-### More pools
+## More pools
 
 The method that is doing the actual socket sending and recieving is unnecessarily allocating a new byte array for every request. It also is the crux of [mGBA-http issue #4](https://github.com/nikouu/mGBA-http/issues/4) where messages longer than 1024 bytes are truncated and data is left in the socket to pollute the next request. This is solved by using both [ArrayPool](https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1?view=net-9.0) and [Microsoft.IO.RecyclableMemoryStream](https://github.com/microsoft/Microsoft.IO.RecyclableMemoryStream).
 
@@ -583,7 +585,7 @@ With 5000 byte messages:
 
 The results are clear: At 40 RPS or lower, there is little to no difference in the payload size of 5KB impacting performance.
 
-### Allocation checking
+## Allocation checking
 
 This is checking if there are any extra allocations in the server that can be dealt with by running the Visual Studio performance profiler. The following image is after a load test with 10 requests per second for 30 seconds:
 
@@ -591,7 +593,7 @@ This is checking if there are any extra allocations in the server that can be de
 
 But at a glance, there doesn't seem to be much without going wild with the code. 
 
-### Pushing it to 11
+## Pushing it to 11
 
 What about 200 RPS? Or 1000? Let's try high numbers for fun when sending GUIDs. Note as the values are echoed back, it doesn't mirror real work. But it is fun in terms of focusing on the network layer. Some adjustments have been made to the load tester to get it to go faster. 
 
@@ -629,7 +631,7 @@ So that's a fantastic limit of 20.1k requests a minute - for now. I'm sure there
 
 Won't matter too much. It's just fun to do 😁
 
-### Checking for a long timeout
+## Checking for a long timeout
 
 What if the user sends a request, which opens a socket and adds it to the socket pool, then doesn't send another request for a long time? Is a long opened and long unused socket going to stay alive? Will it automatically close after some idle or linger timeout?
 
@@ -641,3 +643,23 @@ Seems the answer is ambigious:
 Since I'm using Windows, I'll send a request then wait a little over two hours, then send another one to see if the first (and only) socket in the socket pool will work. Side note: it might also be useful to have a full re-creation of the socket in some circumstances anyway.
 
 So after 3 hours and 20 minutes, the second request was happily sent. 🤷‍♀️ Regardless, added some new socket exception catches which simply recreate the socket instance as part of the retries.
+
+# Wrapping up
+
+So what was learned?
+
+1. Exiting a process in different ways leads to different ways sockets are cleaned up
+    1. This includes the different ways to close with Visual Studio during debugging
+    1. Ctrl + C is the cleanest in all cases
+1. There's significant overhead in setting up a new socket connection with respect to regular sending on an already good to go connection
+1. Even flimsy load testers are hard to get remotely correct
+1. Pooling is great
+    1. Socket pooling via Microsoft.Extensions.ObjectPool
+    1. Buffer pooling via ArrayPool
+    1. MemoryStream pooling via Microsoft.IO.RecyclableMemoryStream
+1. There can be a stampede problem when creating new instances of a socket, something to do with the same ports being taken across different instances it seems?
+1. `Socket.Connected` isn't a live representation, it's whatever the last status was of the socket
+1. The Nagle algorithm exists
+1. Buffer responses on both both ends and use something so the other side knows how big the message is. This is because while you can check the socket for available data, ultimately TCP is a streaming protocol and meaning while it may seem like you have recieved all the data, there could be more data on the way. This project solved it by having a terminating string to look for.
+1. An idle socket connection might not get disconnected
+1. Most of the work from Version 4 onwards probably represents only corner cases, but they were the most fun
