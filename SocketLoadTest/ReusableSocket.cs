@@ -17,15 +17,23 @@ namespace SocketLoadTestServer
         private const int _initialDelay = 400;
         private const int _maxDelay = 2000;
         private static readonly RecyclableMemoryStreamManager _recyclableMemoryStreamManager = new();
-        private static readonly string _terminationString = "<|END|>";
+        private const string _terminationString = "<|END|>";
         private static readonly byte[] _terminationBytes = Encoding.UTF8.GetBytes(_terminationString);
 
         public ReusableSocket(string ipAddress, int port)
         {
 
-            var address = IPAddress.Parse("127.0.0.1");
+            var address = IPAddress.Parse(ipAddress);
             _ipEndpoint = new IPEndPoint(address, port);
             _socket = new Socket(_ipEndpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        }
+
+        public void Connect()
+        {
+            if (!_socket.Connected)
+            {
+                _socket.Connect(_ipEndpoint);
+            }
         }
 
         public async Task<string> SendMessageAsync(string message)
@@ -42,7 +50,7 @@ namespace SocketLoadTestServer
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[{attempts}][{message}]{ex.Message}");
+                    Console.WriteLine($"[{attempts}][-]{ex.Message}");
                     if (attempts >= _maxRetries)
                     {
                         throw;
@@ -58,17 +66,19 @@ namespace SocketLoadTestServer
 
         private async Task<string> SendAsync(string message)
         {
+            //Console.WriteLine(_socket.LocalEndPoint);
             if (!_socket.Connected)
             {
                 await _socket.ConnectAsync(_ipEndpoint);
+                Console.WriteLine(_socket.LocalEndPoint);
             }
 
-            var messageBytes = Encoding.UTF8.GetBytes(message);
+            var messageBytes = Encoding.UTF8.GetBytes(message + _terminationString);
             await _socket.SendAsync(messageBytes, SocketFlags.None);
 
             var response = await ReadAsync();
 
-            Console.WriteLine($"{message.Length}:{response.Length}");
+            //Console.WriteLine($"{message.Length}:{response.Length}");
 
             return response;
         }

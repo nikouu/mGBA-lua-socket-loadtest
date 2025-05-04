@@ -8,7 +8,8 @@ namespace SocketLoadTestClient
     {
         private readonly HttpClient _httpClient;
         private readonly ConcurrentQueue<Stat> _stats = new();
-        private readonly ConcurrentBag<Task> _requests = new();
+        private readonly ConcurrentBag<Task> _individualRequests = new();
+        private readonly ConcurrentBag<Task> _perSecondRequests = new();
 
         private static readonly string _longMessage = new string('a', 5000);
 
@@ -21,31 +22,40 @@ namespace SocketLoadTestClient
         {
             Console.WriteLine($"Running load test with {requestsPerSecond} requests per second for {duration.Seconds} seconds...");
             var totalRequestsToSend = duration.Seconds * requestsPerSecond;
+            var batchRequestsCount = 0;
             var totalRequestsSent = 0;
 
             // Delay between requests to crudely spread them across the second
-            var delayBetweenRequests = TimeSpan.FromSeconds(1.0 / requestsPerSecond) * 0.7;
+            var delayBetweenRequests = TimeSpan.FromMilliseconds(1);
+            //var delayBetweenRequests = TimeSpan.FromSeconds(1.0 / requestsPerSecond);
             var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
             var start = Stopwatch.GetTimestamp();
 
             try
             {
-                while (await timer.WaitForNextTickAsync())
+                while (await timer.WaitForNextTickAsync() && batchRequestsCount < duration.TotalSeconds)
                 {
-                    for (int i = 0; i < requestsPerSecond; i++)
+                    batchRequestsCount++;
+                    _perSecondRequests.Add(Task.Run(async () =>
                     {
-                        var task = SendRequestAndRecordMetricsAsync(_longMessage);
-                        _requests.Add(task);
-                        totalRequestsSent++;
 
-                        // Don't delay after the last request in the second
-                        if (i < requestsPerSecond - 1)
+                        for (int i = 0; i < requestsPerSecond; i++)
                         {
-                            await Task.Delay(delayBetweenRequests);
-                        }
-                    }
+                            var task = SendRequestAndRecordMetricsAsync(Guid.NewGuid().ToString());
+                            _individualRequests.Add(task);
+                            Interlocked.Increment(ref totalRequestsSent);
 
-                    Console.WriteLine($"{totalRequestsSent}/{totalRequestsToSend} requests sent...");
+                            // Don't delay after the last request in the second
+                            if (i < requestsPerSecond - 1)
+                            {
+                                await Task.Delay(delayBetweenRequests);
+                            }
+                        }
+
+                        Console.WriteLine($"{totalRequestsSent}/{totalRequestsToSend} requests sent... {DateTime.Now.Second}");
+
+
+                    }));
 
                     if (totalRequestsSent >= totalRequestsToSend)
                     {
@@ -58,15 +68,17 @@ namespace SocketLoadTestClient
                 // Timer cancelled, test duration ended
             }
 
-            var finishedTaskCount = _requests.Count(x => x.IsCompleted);
-            Console.WriteLine($"\nTest ended. Waiting for {_requests.Count - finishedTaskCount}/{_requests.Count} requests to finish...");
-            await Task.WhenAll(_requests);
+            var finishedTaskCount = _individualRequests.Count(x => x.IsCompleted);
+            Console.WriteLine($"\nTest ended. Waiting for {_individualRequests.Count - finishedTaskCount}/{_individualRequests.Count} requests to finish...");
+            await Task.WhenAll(_perSecondRequests);
+            await Task.WhenAll(_individualRequests);            
             var totalTime = (Stopwatch.GetTimestamp() - start) / (double)Stopwatch.Frequency;
             var successfulRequestCount = _stats.Count(x => x.IsSuccessful);
 
-            Console.WriteLine($"Total requests sent: {totalRequestsSent}");
+            Console.WriteLine($"\nTotal requests sent: {totalRequestsSent}");
             Console.WriteLine($"Successful requests: {successfulRequestCount} ({(int)(((double)successfulRequestCount / totalRequestsSent) * 100)}%)");
             Console.WriteLine($"Average latency (ms): {_stats.Average(x => x.Duration.TotalMilliseconds)}");
+            Console.WriteLine($"95th percentile latency (ms): {_stats.Select(x => x.Duration.TotalMilliseconds).OrderBy(x => x).ElementAt((int)(0.95 * _stats.Count) - 1)}");
             Console.WriteLine($"Largest latency (ms): {_stats.Max(x => x.Duration.TotalMilliseconds)}");
             Console.WriteLine($"Total test time (seconds): {totalTime:F2}");
             Console.WriteLine($"Requests per second handled: {successfulRequestCount / totalTime:F2}");

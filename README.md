@@ -407,6 +407,8 @@ Running the load test without restarting the server doesn't cause issues. It's s
 |                  80 |                      63.31 |                   19 |            1,043 |         100% |
 |                 160 |                      63.67 |                 17.5 |              126 |         100% |
 
+Note: It seems running straight to 160 RPS does give errors, but after a short warmup period, it's fine. Which seems on par with load test things.
+
 So with everything in release mode, it's easy to send more than one request per frame to mGBA (GB and GBA run at 60fps). After 80 requests per second, the single threaded client doing the load test can't keep up with sending that many request per second. This is probably a great state to be in where requests can be handled faster than the framerate and thus inputs of the emulated hardware. While this project is simply reflecting values back, even with heavier calls, it _probably_ is enough performance.
 
 Looking back at my goal from Version 4:
@@ -416,7 +418,7 @@ While I didn't achieve my goal about max latency being under 60ms for five reque
 
 ### Digging into max latency
 
-But why does it seem so consistent across all the recent benchmarks? I suspect it's because the first connection of a socket takes time. And when looking at it across different RPS benchmarks, it's very often the first one of the socket pool making the initial connection. The max otherwise, funnily enough is around 50-60ms!
+But why does it seem so consistent across all the recent benchmarks? I suspect it's because the first connection of a socket takes time. And when looking at it across different RPS benchmarks, it's very often the first one of the socket pool making the initial connection. The max otherwise, funnily enough is around 50-60ms! Might be worth in the future looking at the 95th or 99th percentile as well.
 
 ## Version 7 - Tidy up
 
@@ -544,3 +546,67 @@ function ST_received(id)
     end
 end
 ```
+
+With this, there'll be two benchmarks:
+1. With GUIDs like most of the previous benchmarks have been
+2. With a 5000 byte message
+
+With GUIDs (36 bytes):
+
+| Requests per second | Actual requests per second | Average latency (ms) | 99th percentile latency | Max latency (ms) | Success rate |
+| ------------------: | -------------------------: | -------------------: | ----------------------: | ---------------: | -----------: |
+|                   1 |                       1.00 |                   21 |                      40 |              121 |         100% |
+|                   2 |                       1.97 |                   19 |                      39 |              129 |         100% |
+|                   3 |                       2.95 |                   17 |                      40 |              115 |         100% |
+|                   4 |                       3.92 |                   17 |                      39 |              122 |         100% |
+|                   5 |                       4.90 |                   18 |                      39 |              109 |         100% |
+|                  10 |                       9.77 |                   18 |                      40 |              117 |         100% |
+|                  15 |                      14.65 |                   17 |                      40 |              192 |         100% |
+|                  20 |                      19.43 |                   18 |                      40 |              124 |         100% |
+|                  40 |                      32.24 |                   18 |                      40 |              126 |         100% |
+
+With 5000 byte messages:
+
+| Requests per second | Actual requests per second | Average latency (ms) | 99th percentile latency | Max latency (ms) | Success rate |
+| ------------------: | -------------------------: | -------------------: | ----------------------: | ---------------: | -----------: |
+|                   1 |                       1.00 |                   30 |                      40 |              235 |         100% |
+|                   2 |                       1.98 |                   19 |                      40 |              108 |         100% |
+|                   3 |                       2.95 |                   21 |                      39 |              152 |         100% |
+|                   4 |                       3.92 |                   20 |                      38 |              133 |         100% |
+|                   5 |                       4.90 |                   18 |                      38 |              115 |         100% |
+|                  10 |                       9.76 |                   18 |                      39 |              113 |         100% |
+|                  15 |                      14.65 |                   18 |                      39 |              143 |         100% |
+|                  20 |                      19.41 |                   18 |                      39 |              128 |         100% |
+|                  40 |                      32.25 |                   18 |                      41 |              118 |         100% |
+
+The results are clear: At 40 RPS or lower, there is little to no difference in the payload size of 5KB impacting performance.
+
+### Allocation checking
+
+This is checking if there are any extra allocations in the server that can be dealt with by running the Visual Studio performance profiler. The following image is after a load test with 10 requests per second for 30 seconds:
+
+![Analysis Performance](images/AllocationAnalysisReport.jpg)
+
+But at a glance, there doesn't seem to be much without going wild with the code. 
+
+### Pushing it to 11
+
+What about 200 RPS? Or 1000? Let's try high numbers for fun when sending GUIDs. Note as the values are echoed back, it doesn't mirror real work. But it is fun in terms of focusing on the network layer. Some adjustments have been made to the load tester to get it to go faster. 
+
+| Requests per second | Actual requests per second | Average latency (ms) | 99th percentile latency | Max latency (ms) | Success rate |
+| ------------------: | -------------------------: | -------------------: | ----------------------: | ---------------: | -----------: |
+|                 100 |                         95 |                   19 |                      36 |            1,075 |         100% |
+|                 200 |                        181 |                   17 |                      35 |              637 |         100% |
+|                 300 |                        260 |                   16 |                      35 |              679 |         100% |
+|                 400 |                        121 |               18,081 |                  63,338 |           69,769 |          96% |
+
+Note: Like all tests, these are from cold. No ramp up in requests to warm.
+
+Turns out mGBA starts dropping connections between 300 and 400 RPS. Which as primarily an emulator with a socket server on the side, is pretty good!
+
+
+- do silly huge numbers for the rps
+    - might need to do multithreaded load tester to get enough requests going?
+- do a manual test where a request is sent, then spend like 5 mins not sending a request, then send another. see if theres a socket timeout or something which then invalidates the socket for future use
+    - maye ther needs to be a reset state if theres an exception flag set or something
+- as the versions went, some old ideas were wrong

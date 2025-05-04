@@ -11,11 +11,11 @@ builder.Services.TryAddSingleton(serviceProvider =>
     var policy = new ReusableSocketPooledObjectPolicy("127.0.0.1", 8888);
     return provider.Create(policy);
 });
-builder.Services.AddSingleton<SocketService>();
+//builder.Services.AddSingleton<SocketService>();
 
 var app = builder.Build();
 
-app.UseHttpsRedirection();
+//app.UseHttpsRedirection();
 
 app.MapGet("/mgbaendpoint", async (ObjectPool<ReusableSocket> socketPool, string message) =>
 {
