@@ -602,11 +602,31 @@ What about 200 RPS? Or 1000? Let's try high numbers for fun when sending GUIDs. 
 
 Note: Like all tests, these are from cold. No ramp up in requests to warm.
 
-Turns out mGBA starts dropping connections between 300 and 400 RPS. Which as primarily an emulator with a socket server on the side, is pretty good!
+Turns out mGBA starts dropping connections between 300 and 400 RPS. Which as primarily an emulator with a socket server on the side, is pretty good! Let's see where the limit is:
 
+| Requests per second | Actual requests per second | Average latency (ms) | 99th percentile latency | Max latency (ms) | Success rate |
+| ------------------: | -------------------------: | -------------------: | ----------------------: | ---------------: | -----------: |
+|                 300 |                        260 |                   16 |                      35 |              679 |         100% |
+|                 325 |                        278 |                   16 |                      34 |            1,046 |         100% |
+|                 330 |                        282 |                   16 |                      34 |            1,042 |         100% |
+|                 335 |                        285 |                   16 |                      34 |              554 |         100% |
+|                 340 |                        283 |                   26 |                      34 |            2,136 |          99% |
+|                 350 |                        283 |                   21 |                      35 |            1,651 |          99% |
 
-- do silly huge numbers for the rps
-    - might need to do multithreaded load tester to get enough requests going?
+It looks like at 330 RPS we reach max requests per second at just over 280 real RPS. For clarity, here the load tester sends 330 RPS but after the test is done there's a wait for all the requests to finish which can last longer than the test leading to an actual and lower RPS recieved. At this point the errors come in as:
+> An existing connection was forcibly closed by the remote host
+
+And the script in mGBA returns error logs:
+
+![Exceeding calls](images/mGBAExceedingLimit.jpg)
+
+So that's a fantastic limit of 20.1k requests a minute - for now. I'm sure there's more to be done. But I strongly doubt that this scenario with:
+1. A sketchy load tester
+1. No warm up
+1. Vastly not the use case
+
+Will matter too much. It's just fun to do 😁
+
 - do a manual test where a request is sent, then spend like 5 mins not sending a request, then send another. see if theres a socket timeout or something which then invalidates the socket for future use
     - maye ther needs to be a reset state if theres an exception flag set or something
 - as the versions went, some old ideas were wrong
