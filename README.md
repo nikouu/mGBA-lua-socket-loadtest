@@ -7,6 +7,8 @@ This project has three performance goals:
 2. Find the throughput limits
 3. ~~Explore multiplexing~~ ended up not doing this
 
+[These changes have been folded into mGBA-http version 0.6.0 ⭐](https://github.com/nikouu/mGBA-http/releases/tag/0.6.0)
+
 ## Preface
 
 This document will go through each Git tag milestone to explain in depth what's being explored and why. 
